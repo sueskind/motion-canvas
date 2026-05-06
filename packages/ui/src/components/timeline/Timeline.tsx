@@ -12,6 +12,7 @@ import {
   useSurfaceShortcuts,
 } from '../../contexts';
 import {
+  useCurrentScene,
   useDuration,
   usePlayerTime,
   usePreviewSettings,
@@ -20,8 +21,12 @@ import {
   useSize,
   useStateChange,
   useStorage,
+  useSubscribableValue,
 } from '../../hooks';
-import {labelClipDraggingLeftSignal} from '../../signals';
+import {
+  focusSceneRequestSignal,
+  labelClipDraggingLeftSignal,
+} from '../../signals';
 import {MouseButton, MouseMask, clamp} from '../../utils';
 import {borderHighlight} from '../animations';
 import {AudioTrack} from './AudioTrack';
@@ -55,6 +60,8 @@ export function Timeline() {
   const isReady = duration > 0;
 
   const {durationTime} = usePlayerTime();
+  const currentScene = useCurrentScene();
+  const sceneCache = useSubscribableValue(currentScene?.onCacheChanged);
 
   useLayoutEffect(() => {
     containerRef.current.scrollLeft = offset;
@@ -147,6 +154,31 @@ export function Timeline() {
     [duration / fps, rect.width],
   );
 
+  const focusScene = () => {
+    if (!sceneCache || sceneCache.duration <= 0 || rect.width <= 0 || duration <= 0) {
+      return;
+    }
+    const GAP = 32;
+    const target =
+      (duration / sceneCache.duration) * ((rect.width - 2 * GAP) / rect.width);
+    const newScale = clamp(ZOOM_MIN, zoomMax, target);
+    const newPlayableLength = rect.width * newScale;
+    const sceneStartPx =
+      rect.width / 2 + (sceneCache.firstFrame / duration) * newPlayableLength;
+    const newOffset = clamp(0, newPlayableLength, sceneStartPx - GAP);
+    containerRef.current.scrollLeft = newOffset;
+    setScale(newScale);
+    setOffset(newOffset);
+  };
+
+  const lastFocusSceneRequest = useRef(0);
+  useSignalEffect(() => {
+    const id = focusSceneRequestSignal.value;
+    if (id === 0 || id === lastFocusSceneRequest.current) return;
+    lastFocusSceneRequest.current = id;
+    focusScene();
+  });
+
   useShortcuts(TIMELINE_SHORTCUTS, {
     focusPlayhead: () => {
       const maxOffset = sizes.fullLength - sizes.viewLength;
@@ -155,6 +187,7 @@ export function Timeline() {
       containerRef.current.scrollLeft = newOffset;
       setOffset(newOffset);
     },
+    focusScene,
     moveRangeStart: () => {
       const frame = player.onFrameChanged.current;
       const end = player.status.secondsToFrames(range[1]);

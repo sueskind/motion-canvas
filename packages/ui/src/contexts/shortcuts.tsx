@@ -117,6 +117,12 @@ export const TIMELINE_SHORTCUTS = makeShortcuts('timeline', {
     key: 'f',
     modifiers: {},
   },
+  focusScene: {
+    display: 'Shift + F',
+    description: 'Focus current scene',
+    key: 'F',
+    modifiers: {shift: true},
+  },
   moveRangeStart: {
     display: 'B',
     description: 'Move range start to playhead',

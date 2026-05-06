@@ -3,10 +3,12 @@ import styles from './Playback.module.scss';
 import {useApplication} from '../../contexts';
 import {GLOBAL_EDITOR_SHORTCUTS, useShortcuts} from '../../contexts/shortcuts';
 import {usePlayerState} from '../../hooks';
+import {focusSceneRequestSignal} from '../../signals';
 import {IconButton, IconCheckbox, Input, Select, Slider} from '../controls';
 import {
   FastForward,
   FastRewind,
+  Locate,
   Pause,
   PhotoCamera,
   PlayArrow,
@@ -137,6 +139,14 @@ export function PlaybackControls() {
         }
       >
         <PhotoCamera />
+      </IconButton>
+      <IconButton
+        title="Focus current scene"
+        onClick={() => {
+          focusSceneRequestSignal.value = focusSceneRequestSignal.value + 1;
+        }}
+      >
+        <Locate />
       </IconButton>
     </div>
   );
