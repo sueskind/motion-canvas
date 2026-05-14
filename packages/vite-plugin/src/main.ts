@@ -2,6 +2,7 @@ import path from 'path';
 import type {Plugin} from 'vite';
 import {
   CorsProxyPluginConfig,
+  animationGroupPlugin,
   assetsPlugin,
   corsProxyPlugin,
   editorPlugin,
@@ -127,6 +128,7 @@ export default ({
         }
       },
     },
+    animationGroupPlugin(),
     metaPlugin(),
     settingsPlugin(),
     scenesPlugin(),

@@ -4,6 +4,7 @@
  */
 
 export * from './all';
+export * from './animationGroup';
 export * from './any';
 export * from './chain';
 export * from './delay';

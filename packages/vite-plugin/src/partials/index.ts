@@ -1,3 +1,4 @@
+export * from './animationGroup';
 export * from './assets';
 export * from './corsProxy';
 export * from './editor';

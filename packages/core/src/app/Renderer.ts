@@ -1,6 +1,7 @@
 import {EventDispatcher, ValueDispatcher} from '../events';
 import type {Scene, Sound} from '../scenes';
 import {ReadOnlyTimeEvents} from '../scenes/timeEvents';
+import {getActiveAnimationGroup} from '../flow/animationGroup';
 import {clampRemap} from '../tweening';
 import {Vector2} from '../types';
 import {Semaphore} from '../utils';
@@ -298,6 +299,7 @@ export class Renderer {
       this.playback.currentScene.name,
       signal,
       this.stage.context,
+      getActiveAnimationGroup(),
     );
   }
 }

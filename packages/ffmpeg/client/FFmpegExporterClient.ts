@@ -1,6 +1,5 @@
 import type {
   Exporter,
-  MetaField,
   Project,
   RendererResult,
   RendererSettings,
@@ -57,14 +56,30 @@ export class FFmpegExporterClient implements Exporter {
   public static readonly id = '@motion-canvas/ffmpeg';
   public static readonly displayName = 'Video (FFmpeg)';
 
-  public static meta(project: Project): MetaField<any> {
-    return new ObjectMetaField(this.displayName, {
+  public static meta(project: Project) {
+    const meta = new ObjectMetaField(this.displayName, {
       fastStart: new BoolMetaField('fast start', true),
       includeAudio: new BoolMetaField('include audio', true).disable(
         !project.audio,
       ),
       audioSampleRate: new NumberMetaField('audio sample rate', 48000),
+      groupByScene: new BoolMetaField('group by scene', false).describe(
+        'Output one mp4 per scene. Audio is omitted.',
+      ),
+      groupByAnimation: new BoolMetaField('group by animation', false).describe(
+        'Output one mp4 per animation (each top-level `yield*` in a scene). Audio is omitted.',
+      ),
     });
+
+    const refreshAudioState = () => {
+      const grouped =
+        meta.groupByScene.get() || meta.groupByAnimation.get();
+      meta.includeAudio.disable(!project.audio || grouped);
+    };
+    meta.groupByScene.onChanged.subscribe(refreshAudioState);
+    meta.groupByAnimation.onChanged.subscribe(refreshAudioState);
+
+    return meta;
   }
 
   public static async create(project: Project, settings: RendererSettings) {
@@ -84,6 +99,9 @@ export class FFmpegExporterClient implements Exporter {
 
   private concurrentFrames = 0;
   private error: unknown = false;
+  private lastGroupKey: string | null = null;
+  private groupByScene = false;
+  private groupByAnimation = false;
 
   public constructor(
     private readonly project: Project,
@@ -92,6 +110,8 @@ export class FFmpegExporterClient implements Exporter {
 
   public async start(sounds: Sound[], duration: number): Promise<void> {
     const options = this.settings.exporter.options as FFmpegExporterOptions;
+    this.groupByScene = options.groupByScene;
+    this.groupByAnimation = options.groupByAnimation;
     await this.invoke('start', {
       ...this.settings,
       ...options,
@@ -103,13 +123,26 @@ export class FFmpegExporterClient implements Exporter {
     });
   }
 
+  private buildGroupKey(
+    sceneName: string,
+    animationName: string | null,
+  ): string {
+    const parts: string[] = [];
+    if (this.groupByScene) parts.push(sceneName);
+    if (this.groupByAnimation) {
+      parts.push(`${sceneName}-${animationName ?? '_ungrouped'}`);
+    }
+    return parts.join('/');
+  }
+
   public async handleFrame(
     canvas: HTMLCanvasElement,
     _frame: number,
     _sceneFrame: number,
-    _sceneName: string,
+    sceneName: string,
     _signal: AbortSignal,
     context: CanvasRenderingContext2D,
+    animationName: string | null = null,
   ): Promise<void> {
     while (this.concurrentFrames >= EXPORT_FRAME_LIMIT) {
       await new Promise(resolve => setTimeout(resolve, EXPORT_RETRY_DELAY));
@@ -117,6 +150,22 @@ export class FFmpegExporterClient implements Exporter {
 
     if (this.error) {
       throw this.error;
+    }
+
+    if (this.groupByScene || this.groupByAnimation) {
+      const groupKey = this.buildGroupKey(sceneName, animationName);
+      if (groupKey !== this.lastGroupKey) {
+        this.lastGroupKey = groupKey;
+        // Wait for any in-flight frames before rolling over so they go to the
+        // previous file, not the new one.
+        while (this.concurrentFrames > 0) {
+          await new Promise(resolve => setTimeout(resolve, EXPORT_RETRY_DELAY));
+        }
+        if (this.error) {
+          throw this.error;
+        }
+        await this.invoke('rollover', {relativePath: groupKey});
+      }
     }
 
     const data = context.getImageData(0, 0, canvas.width, canvas.height).data;
