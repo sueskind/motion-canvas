@@ -141,13 +141,18 @@ export class ImageExporter implements Exporter {
         frameNumber = frame;
       }
 
+      const paddedFrame = frameNumber.toString().padStart(6, '0');
+      const name = this.groupByAnimation
+        ? `${sceneName}-${animationName ?? '_ungrouped'}-${paddedFrame}`
+        : paddedFrame;
+
       this.frameLookup.add(frame);
       import.meta.hot!.send('motion-canvas:export', {
         frame,
         data: canvas.toDataURL(this.fileType, this.quality),
         mimeType: this.fileType,
         subDirectories,
-        name: frameNumber.toString().padStart(6, '0'),
+        name,
       });
     }
   }

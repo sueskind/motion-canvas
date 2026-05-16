@@ -140,7 +140,7 @@ export function animationGroupPlugin(): Plugin {
         if (start == null || end == null) return;
 
         counter++;
-        const name = `anim${counter.toString().padStart(4, '0')}`;
+        const name = counter.toString().padStart(4, '0');
         ms.appendLeft(start, `__mc_animationGroup('${name}', () => `);
         ms.appendRight(end, ')');
         didWrap = true;
