@@ -69,15 +69,23 @@ export class FFmpegExporterClient implements Exporter {
       groupByAnimation: new BoolMetaField('group by animation', false).describe(
         'Output one mp4 per animation (each top-level `yield*` in a scene). Audio is omitted.',
       ),
+      saveOneFrameGroups: new BoolMetaField(
+        'save one-frame groups',
+        true,
+      ).describe(
+        'When unchecked, groups that end up containing only a single frame are skipped (no mp4 is produced for them). Has no effect when neither grouping option is enabled.',
+      ),
     });
 
-    const refreshAudioState = () => {
+    const refreshGroupedState = () => {
       const grouped =
         meta.groupByScene.get() || meta.groupByAnimation.get();
       meta.includeAudio.disable(!project.audio || grouped);
+      meta.saveOneFrameGroups.disable(!grouped);
     };
-    meta.groupByScene.onChanged.subscribe(refreshAudioState);
-    meta.groupByAnimation.onChanged.subscribe(refreshAudioState);
+    meta.groupByScene.onChanged.subscribe(refreshGroupedState);
+    meta.groupByAnimation.onChanged.subscribe(refreshGroupedState);
+    refreshGroupedState();
 
     return meta;
   }
@@ -99,9 +107,12 @@ export class FFmpegExporterClient implements Exporter {
 
   private concurrentFrames = 0;
   private error: unknown = false;
-  private lastGroupKey: string | null = null;
+  private lastEmittedGroupKey: string | null = null;
   private groupByScene = false;
   private groupByAnimation = false;
+  private saveOneFrameGroups = true;
+  private pendingFrame: Uint8ClampedArray | null = null;
+  private pendingGroupKey: string | null = null;
 
   public constructor(
     private readonly project: Project,
@@ -112,6 +123,7 @@ export class FFmpegExporterClient implements Exporter {
     const options = this.settings.exporter.options as FFmpegExporterOptions;
     this.groupByScene = options.groupByScene;
     this.groupByAnimation = options.groupByAnimation;
+    this.saveOneFrameGroups = options.saveOneFrameGroups;
     await this.invoke('start', {
       ...this.settings,
       ...options,
@@ -152,35 +164,64 @@ export class FFmpegExporterClient implements Exporter {
       throw this.error;
     }
 
-    if (this.groupByScene || this.groupByAnimation) {
-      const groupKey = this.buildGroupKey(sceneName, animationName);
-      if (groupKey !== this.lastGroupKey) {
-        this.lastGroupKey = groupKey;
-        // Wait for any in-flight frames before rolling over so they go to the
-        // previous file, not the new one.
-        while (this.concurrentFrames > 0) {
-          await new Promise(resolve => setTimeout(resolve, EXPORT_RETRY_DELAY));
-        }
-        if (this.error) {
-          throw this.error;
-        }
-        await this.invoke('rollover', {relativePath: groupKey});
-      }
-    }
+    const grouping = this.groupByScene || this.groupByAnimation;
+    const groupKey = grouping
+      ? this.buildGroupKey(sceneName, animationName)
+      : null;
 
     const data = context.getImageData(0, 0, canvas.width, canvas.height).data;
-    this.concurrentFrames++;
-    this.invoke('handleFrame', data, 'octet-stream')
-      .then(() => {
-        this.concurrentFrames--;
-      })
-      .catch(error => {
-        this.error = error;
-        this.concurrentFrames--;
-      });
+
+    if (!grouping || this.saveOneFrameGroups) {
+      // Original behavior: roll over immediately on every group change.
+      if (groupKey !== null && groupKey !== this.lastEmittedGroupKey) {
+        await this.rolloverTo(groupKey);
+      }
+      this.sendFrame(data);
+      return;
+    }
+
+    // Buffered behavior: defer the rollover (and the first frame) until the
+    // pending group is confirmed to contain at least two frames. A 1-frame
+    // group ends up discarded — no rollover means no output file is created
+    // for it.
+    if (this.pendingFrame) {
+      if (this.pendingGroupKey === groupKey) {
+        // Second frame of the pending group → commit it.
+        await this.rolloverTo(groupKey!);
+        this.sendFrame(this.pendingFrame);
+        this.pendingFrame = null;
+        this.pendingGroupKey = null;
+        this.sendFrame(data);
+        return;
+      }
+      // Group changed before a second frame arrived → discard pending.
+      this.pendingFrame = null;
+      this.pendingGroupKey = null;
+    }
+
+    if (groupKey === this.lastEmittedGroupKey) {
+      // We're still inside the currently-open output; stream normally.
+      this.sendFrame(data);
+    } else {
+      // First frame of a new group; hold it until we know if it's keepers.
+      this.pendingFrame = data;
+      this.pendingGroupKey = groupKey;
+    }
   }
 
   public async stop(result: RendererResult): Promise<void> {
+    // A trailing pending frame here means the final group only ever had one
+    // frame — discard it (or flush it, if the user opted to keep one-frame
+    // groups).
+    if (this.pendingFrame && this.pendingGroupKey !== null) {
+      if (this.saveOneFrameGroups) {
+        await this.rolloverTo(this.pendingGroupKey);
+        this.sendFrame(this.pendingFrame);
+      }
+      this.pendingFrame = null;
+      this.pendingGroupKey = null;
+    }
+
     while (this.concurrentFrames >= EXPORT_FRAME_LIMIT) {
       await new Promise(resolve => setTimeout(resolve, EXPORT_RETRY_DELAY));
     }
@@ -190,6 +231,32 @@ export class FFmpegExporterClient implements Exporter {
     }
 
     await this.invoke('end', result);
+  }
+
+  private async rolloverTo(groupKey: string): Promise<void> {
+    if (groupKey === this.lastEmittedGroupKey) return;
+    // Wait for any in-flight frames before rolling over so they go to the
+    // previous file, not the new one.
+    while (this.concurrentFrames > 0) {
+      await new Promise(resolve => setTimeout(resolve, EXPORT_RETRY_DELAY));
+    }
+    if (this.error) {
+      throw this.error;
+    }
+    await this.invoke('rollover', {relativePath: groupKey});
+    this.lastEmittedGroupKey = groupKey;
+  }
+
+  private sendFrame(data: Uint8ClampedArray): void {
+    this.concurrentFrames++;
+    this.invoke('handleFrame', data, 'octet-stream')
+      .then(() => {
+        this.concurrentFrames--;
+      })
+      .catch(error => {
+        this.error = error;
+        this.concurrentFrames--;
+      });
   }
 
   /**

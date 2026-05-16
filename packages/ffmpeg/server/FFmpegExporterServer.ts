@@ -28,6 +28,7 @@ export interface FFmpegExporterSettings extends RendererSettings {
 
   groupByScene: boolean;
   groupByAnimation: boolean;
+  saveOneFrameGroups: boolean;
 }
 
 function formatFilters(filters: AudioVideoFilter[]): string {
