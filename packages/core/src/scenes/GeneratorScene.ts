@@ -11,6 +11,7 @@ import {
 } from '../threading';
 import {Vector2} from '../types';
 import {endPlayback, endScene, startPlayback, startScene} from '../utils';
+import {resetAnimationGroups} from '../flow/animationGroup';
 import {LifecycleEvents} from './LifecycleEvents';
 import {Random} from './Random';
 import {
@@ -287,6 +288,7 @@ export abstract class GeneratorScene<T>
     this.previousScene = previousScene;
     this.previousOnTop = false;
     this.random = new Random(this.meta.seed.get());
+    resetAnimationGroups();
     this.runner = threads(
       () => this.runnerFactory(this.getView()),
       thread => {
