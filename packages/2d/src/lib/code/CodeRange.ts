@@ -183,7 +183,14 @@ export function findAllCodeRanges(
   if (typeof pattern === 'string') {
     pattern = new RegExp(escapeRegExpString(pattern), 'g');
   } else {
-    pattern = new RegExp(pattern, 'g');
+    // Preserve the caller's flags (e.g. `m`, `i`, `s`) — only force `g` on so
+    // `matchAll` works. Passing flags as the 2nd arg of `new RegExp(regex, ...)`
+    // REPLACES the original flags, which would silently drop `m` and break any
+    // multiline `^`/`$` anchored pattern.
+    const flags = pattern.flags.includes('g')
+      ? pattern.flags
+      : pattern.flags + 'g';
+    pattern = new RegExp(pattern.source, flags);
   }
 
   const matches = code.matchAll(pattern);
