@@ -34,6 +34,15 @@ export function projectsPlugin({
       const [base] = id.split('?');
       const {name, dir} = path.posix.parse(base);
 
+      // Use the unique ProjectData name (meta "name" field or the project
+      // url) instead of the file basename, so projects that share a file
+      // name (e.g. video.ts per video directory) don't collide in output
+      // paths and the editor UI.
+      const projectData = projects.find(
+        project => path.resolve(config.root, project.filePath) === base,
+      );
+      const projectName = projectData?.name ?? name;
+
       const runsInEditor = buildForEditor || config.command === 'serve';
       const metaFile = `${name}.meta`;
       await createMeta(path.join(dir, metaFile));
@@ -66,7 +75,7 @@ import {MetaFile} from '@motion-canvas/core';
         import config from './${name}';
         import settings from 'virtual:settings.meta';
         export default ${runsInEditor ? 'await editorBootstrap' : 'bootstrap'}(
-          '${name}',
+          '${projectName}',
           ${versions},
           [${pluginNames.join(', ')}],
           config,
