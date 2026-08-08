@@ -15,6 +15,7 @@ import {
   ThreadGenerator,
   TimingFunction,
   UNIFORM_DESTINATION_MATRIX,
+  UNIFORM_FRAME,
   UNIFORM_SOURCE_MATRIX,
   UNIFORM_TIME,
   Vector2,
@@ -1617,7 +1618,7 @@ export class Node implements Promisable<Node> {
       );
 
       gl.uniform1i(
-        gl.getUniformLocation(program, UNIFORM_TIME),
+        gl.getUniformLocation(program, UNIFORM_FRAME),
         scene.playback.frame,
       );
 
