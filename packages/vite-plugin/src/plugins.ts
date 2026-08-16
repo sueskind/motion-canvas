@@ -20,6 +20,11 @@ export interface ProjectData {
    * The path to access the project relative to the Host Name.
    */
   url: string;
+  /**
+   * An optional group the project belongs to, displayed as a section on the
+   * index page. Configured per project entry in the Vite plugin.
+   */
+  group?: string;
 }
 
 /**

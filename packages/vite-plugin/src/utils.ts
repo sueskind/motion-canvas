@@ -13,41 +13,53 @@ export async function createMeta(metaPath: string) {
   }
 }
 
-export function getProjects(project: string | string[]): ProjectData[] {
+/**
+ * A single `project` configuration entry: a path/glob, or an object pairing
+ * an `include` path/glob with an optional index-page `group`.
+ */
+export type ProjectInput = string | {include: string; group?: string};
+
+export function getProjects(
+  project: ProjectInput | ProjectInput[],
+): ProjectData[] {
   const list: ProjectData[] = [];
-  const projectList = expandFilePaths(project);
-  for (const filePath of projectList) {
+  for (const {filePath, group} of expandFilePaths(project)) {
     const {name, dir} = path.posix.parse(filePath);
     const metaFile = `${name}.meta`;
     const metaData = getMeta(path.join(dir, metaFile));
     const url = path.posix.join(dir, name);
-    const data = {
+    const data: ProjectData = {
       name: metaData?.name ?? url,
       fileName: name,
       url,
       filePath,
     };
+    if (group !== undefined) {
+      data.group = group;
+    }
     list.push(data);
   }
 
   return list;
 }
 
-function expandFilePaths(filePaths: string[] | string): string[] {
-  const expandedFilePaths = [];
+function expandFilePaths(
+  inputs: ProjectInput | ProjectInput[],
+): {filePath: string; group?: string}[] {
+  const expanded: {filePath: string; group?: string}[] = [];
 
-  for (const filePath of typeof filePaths === 'string'
-    ? [filePaths]
-    : filePaths) {
-    if (fg.isDynamicPattern(filePath)) {
-      const matchingFilePaths = fg.sync(filePath, {onlyFiles: true});
-      expandedFilePaths.push(...matchingFilePaths);
+  for (const input of Array.isArray(inputs) ? inputs : [inputs]) {
+    const {include, group} =
+      typeof input === 'string' ? {include: input, group: undefined} : input;
+    if (fg.isDynamicPattern(include)) {
+      const matchingFilePaths = fg.sync(include, {onlyFiles: true});
+      expanded.push(...matchingFilePaths.map(filePath => ({filePath, group})));
     } else {
-      expandedFilePaths.push(filePath);
+      expanded.push({filePath: include, group});
     }
   }
 
-  return expandedFilePaths;
+  return expanded;
 }
 
 function getMeta(metaPath: string) {

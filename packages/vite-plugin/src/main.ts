@@ -14,30 +14,32 @@ import {
   webglPlugin,
 } from './partials';
 import {PLUGIN_OPTIONS, PluginConfig, PluginOptions, isPlugin} from './plugins';
-import {getProjects} from './utils';
+import {getProjects, ProjectInput} from './utils';
 
 export interface MotionCanvasPluginConfig {
   /**
    * The import path of the project file or an array of paths.
-   * Also supports globs.
+   * Also supports globs, and entries with an optional display group.
    *
    * @remarks
    * Each file must contain a default export exposing an instance of the
-   * {@link Project} class.
+   * {@link Project} class. An entry can either be a plain path/glob or an
+   * object with an `include` path/glob and an optional `group` name — the
+   * index page displays grouped projects in collapsible sections.
    *
    * @example
    * ```ts
    * motionCanvas({
    *   project: [
    *     './src/firstProject.ts',
-   *     './src/secondProject.ts',
+   *     {include: './src/examples/*.ts', group: 'examples'},
    *   ]
    * })
    * ```
    *
    * @defaultValue './src/project.ts'
    */
-  project?: string | string[];
+  project?: ProjectInput | ProjectInput[];
   /**
    * A directory path to which the animation will be rendered.
    *
