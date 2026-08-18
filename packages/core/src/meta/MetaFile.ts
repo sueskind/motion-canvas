@@ -29,7 +29,11 @@ export class MetaFile<T> {
     if (this.cache) {
       this.metaField.set(this.cache);
     }
-    this.metaField?.onChanged.subscribe(this.handleChanged);
+    // Skip the subscriber's initial replay: it would immediately "save" the
+    // very data that was just loaded. Besides being pointless, the save races
+    // a 1s ack timeout against the HMR socket, which loses on pages that
+    // start heavy synchronous work right after load.
+    this.metaField?.onChanged.subscribe(this.handleChanged, false);
   }
 
   protected handleChanged = async () => {
