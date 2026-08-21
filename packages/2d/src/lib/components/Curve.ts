@@ -410,6 +410,16 @@ export abstract class Curve extends Shape {
   }
 
   protected override drawShape(context: CanvasRenderingContext2D) {
+    // A curve trimmed to nothing has nothing to draw. Canvas, however, still
+    // paints a dot for a zero-length subpath whenever `lineCap` is `round` or
+    // `square` — so a curve parked at `end={0}` waiting to be revealed shows
+    // up as a speck instead of being invisible. Skip the draw entirely.
+    // Only trimmed curves can reach zero length, and `requiresProfile()` is
+    // the cheap test for that: it keeps the profile-free fast path that
+    // Rect, Circle and Polygon rely on for their untrimmed outlines.
+    if (this.requiresProfile() && this.arcLength() < 0.001) {
+      return;
+    }
     super.drawShape(context);
     if (this.startArrow() || this.endArrow()) {
       this.drawArrows(context);
