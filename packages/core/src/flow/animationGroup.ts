@@ -1,57 +1,111 @@
+import type {Scene} from '../scenes';
 import {ThreadGenerator} from '../threading';
+import {useScene} from '../utils';
 
-let activeGroup: string | null = null;
-const invocationCounts = new Map<string, number>();
+interface GroupEntry {
+  label: string | null;
+  name: string;
+}
 
-/**
- * Read the currently active animation group name, or `null` if no group is
- * active. Intended for exporters that want to partition output by group.
- */
-export function getActiveAnimationGroup(): string | null {
-  return activeGroup;
+interface GroupState {
+  /** Number of segments handed out so far in the current scene run. */
+  sequence: number;
+  /** Groups currently entered, innermost last. */
+  stack: GroupEntry[];
+  /** Name of the current stretch of frames outside any group. */
+  gap: string | null;
 }
 
 /**
- * Reset the per-name invocation counters used to disambiguate repeated
- * `animationGroup` calls (e.g. the same `yield*` inside a loop). Intended to be
- * called at the start of each fresh scene generator run so that names restart
- * at their unsuffixed form.
+ * Group state is kept per scene instance rather than globally: the editor's
+ * player and the renderer each own their scene instances, and during a scene
+ * transition two scenes progress in the same frame. A single module-level
+ * value would let either of those overwrite the other's group.
  */
-export function resetAnimationGroups(): void {
-  invocationCounts.clear();
+const states = new WeakMap<Scene, GroupState>();
+
+function stateOf(scene: Scene): GroupState {
+  let state = states.get(scene);
+  if (!state) {
+    state = {sequence: 0, stack: [], gap: null};
+    states.set(scene, state);
+  }
+  return state;
+}
+
+function nextName(state: GroupState, label: string | null): string {
+  state.sequence++;
+  const index = state.sequence.toString().padStart(4, '0');
+  return label === null ? index : `${index}-${label}`;
 }
 
 /**
- * Run the given generator inside a named animation group.
+ * Read the name of the animation group the given scene is currently in.
  *
  * @remarks
- * Sets the module-level active group to `name` for the duration of the
- * delegated generator, then restores the previous value. This is the runtime
- * counterpart to the Vite plugin's build-time transform that wraps each
- * top-level `yield*` in a scene generator. Calling it manually is supported
- * too — nesting works (inner group restores outer on exit).
+ * Intended for exporters that want to partition output by group. Names are
+ * zero-padded indices handed out in the order the segments start at runtime,
+ * so sorting them by name always yields chronological order — also for groups
+ * inside loops and for frames that fall outside any group.
  *
- * Because the wrapping happens at build time, a single source-level `yield*`
- * inside a loop or re-entered conditional reuses the same name across runtime
- * invocations. To keep exporter output unambiguous, the second and subsequent
- * invocations of a name within the same scene are disambiguated with a
- * `-N` suffix (`anim0040`, `anim0040-2`, `anim0040-3`, …). Counters reset per
- * scene via {@link resetAnimationGroups}.
+ * @param scene - The scene whose current frame is being exported.
+ */
+export function getActiveAnimationGroup(scene: Scene): string | null {
+  const state = states.get(scene);
+  if (!state) return null;
+  const entry = state.stack.at(-1);
+  if (entry) return entry.name;
+  state.gap ??= nextName(state, null);
+  return state.gap;
+}
+
+/**
+ * Forget the group state of the given scene. Called at the start of each
+ * fresh scene generator run so that indices restart at `0001`.
  *
- * @param name - Group name used by exporters for output paths.
+ * @remarks
+ * Also discards entries left behind by an abandoned run, whose generators
+ * never reached their `finally` blocks.
+ */
+export function resetAnimationGroups(scene: Scene): void {
+  states.delete(scene);
+}
+
+/**
+ * Run the given generator inside an animation group.
+ *
+ * @remarks
+ * This is the runtime counterpart to the Vite plugin's build-time transform
+ * that wraps each top-level `yield*` in a scene generator. Calling it manually
+ * is supported too.
+ *
+ * Every contiguous run of frames gets its own name, taken from a per-scene
+ * counter in the order the runs start: `0001`, `0002`, … A labelled group
+ * appends its label (`0007-intro`). The same source-level `yield*` executed
+ * repeatedly (e.g. inside a loop) gets a new index each time, so the
+ * iterations sort in the order they played. When a nested group ends, the
+ * rest of the enclosing group continues under a fresh index instead of
+ * reopening the name it had before the nested group started.
+ *
+ * @param label - Optional label appended to the group's index, or `null`.
  * @param factory - A generator factory invoked once.
  */
 export function* animationGroup(
-  name: string,
+  label: string | null,
   factory: () => ThreadGenerator,
 ): ThreadGenerator {
-  const previous = activeGroup;
-  const count = (invocationCounts.get(name) ?? 0) + 1;
-  invocationCounts.set(name, count);
-  activeGroup = count === 1 ? name : `${name}-${count}`;
+  const state = stateOf(useScene());
+  const entry: GroupEntry = {label, name: nextName(state, label)};
+  state.stack.push(entry);
+  state.gap = null;
   try {
     yield* factory();
   } finally {
-    activeGroup = previous;
+    const index = state.stack.lastIndexOf(entry);
+    if (index !== -1) {
+      state.stack.splice(index, 1);
+      const parent = state.stack.at(-1);
+      if (parent) parent.name = nextName(state, parent.label);
+    }
   }
 }

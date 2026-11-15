@@ -50,7 +50,7 @@ export class ImageExporter implements Exporter {
         'Group exported images by scene. When checked, separates the sequence into subdirectories for each scene in the project.',
       ),
       groupByAnimation: new BoolMetaField('group by animation', false).describe(
-        'Group exported images by animation. Each top-level `yield*` statement in a scene becomes its own subdirectory (0001, 0002, ...). Without "group by scene", frames from different scenes share folders.',
+        'Group exported images by animation. Each run of a top-level `yield*` statement in a scene becomes its own subdirectory, numbered in playback order (0001, 0002, ...), so a statement inside a loop gets one per iteration. Without "group by scene", frames from different scenes share folders.',
       ),
       saveOneFrameGroups: new BoolMetaField(
         'save one-frame groups',

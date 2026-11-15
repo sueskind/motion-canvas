@@ -299,7 +299,7 @@ export class Renderer {
       this.playback.currentScene.name,
       signal,
       this.stage.context,
-      getActiveAnimationGroup(),
+      getActiveAnimationGroup(this.playback.currentScene),
     );
   }
 }

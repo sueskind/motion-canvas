@@ -288,7 +288,7 @@ export abstract class GeneratorScene<T>
     this.previousScene = previousScene;
     this.previousOnTop = false;
     this.random = new Random(this.meta.seed.get());
-    resetAnimationGroups();
+    resetAnimationGroups(this);
     this.runner = threads(
       () => this.runnerFactory(this.getView()),
       thread => {

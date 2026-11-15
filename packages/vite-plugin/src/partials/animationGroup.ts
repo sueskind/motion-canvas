@@ -50,7 +50,6 @@ export function animationGroupPlugin(): Plugin {
       }
 
       const ms = new MagicString(code);
-      let counter = 0;
       let didWrap = false;
 
       traverse(ast, {
@@ -68,7 +67,6 @@ export function animationGroupPlugin(): Plugin {
             return;
           }
 
-          counter = 0;
           const generator = arg as FunctionExpression | ArrowFunctionExpression;
           if (generator.body.type !== 'BlockStatement') return;
 
@@ -139,9 +137,9 @@ export function animationGroupPlugin(): Plugin {
         const end = (inner as Node).end;
         if (start == null || end == null) return;
 
-        counter++;
-        const name = counter.toString().padStart(4, '0');
-        ms.appendLeft(start, `__mc_animationGroup('${name}', () => `);
+        // No label: the group's name is its runtime index, handed out in the
+        // order groups start, so loop iterations sort chronologically.
+        ms.appendLeft(start, `__mc_animationGroup(null, () => `);
         ms.appendRight(end, ')');
         didWrap = true;
       }
