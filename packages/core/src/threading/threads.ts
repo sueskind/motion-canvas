@@ -67,6 +67,7 @@ export function* threads(
     const newThreads = [];
     const queue = [...threads];
     const dt = playback.deltaTime;
+    let idle = true;
 
     while (queue.length > 0) {
       const thread = queue.pop();
@@ -75,6 +76,9 @@ export function* threads(
       }
 
       const result = thread.next();
+      if (!thread.waiting) {
+        idle = false;
+      }
       if (result.done) {
         thread.cancel();
         continue;
@@ -110,6 +114,7 @@ export function* threads(
       }
     }
 
+    rootThread.idle = idle;
     if (threads.length > 0) yield;
   }
 }

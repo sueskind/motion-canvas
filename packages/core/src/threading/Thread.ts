@@ -63,6 +63,29 @@ export class Thread {
     return this.parent?.root ?? this;
   }
 
+  /**
+   * Whether the most recent step of this thread did nothing but keep waiting.
+   *
+   * @remarks
+   * Cleared each time the thread is progressed. Waiting primitives such as
+   * {@link flow.waitFor} and {@link threading.join} set it right before they
+   * yield again without having done anything else. A thread that did any
+   * other work during its step - including arriving at a wait - is not
+   * waiting.
+   */
+  public waiting = false;
+
+  /**
+   * Whether nothing happened during the most recent update cycle.
+   *
+   * @remarks
+   * Only maintained for the root thread of a {@link threading.threads}
+   * context. It's `true` when every thread progressed during the cycle was
+   * {@link waiting}, meaning the frame produced by the cycle looks exactly like
+   * the one before it.
+   */
+  public idle = false;
+
   public parent: Thread | null = null;
   private isCanceled = false;
   private isPaused = false;
@@ -92,12 +115,14 @@ export class Thread {
    */
   public next() {
     if (this.paused) {
+      this.waiting = true;
       return {
         value: null,
         done: false,
       };
     }
 
+    this.waiting = false;
     startThread(this);
     const result = this.runner.next(this.value);
     endThread(this);

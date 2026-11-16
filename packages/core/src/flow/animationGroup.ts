@@ -1,10 +1,13 @@
 import type {Scene} from '../scenes';
 import {ThreadGenerator} from '../threading';
 import {useScene} from '../utils';
+import {waitFor, waitUntil} from './scheduling';
 
 interface GroupEntry {
   label: string | null;
   name: string;
+  /** Whether the group consists of a single `waitFor` or `waitUntil` call. */
+  wait: boolean;
 }
 
 interface GroupState {
@@ -60,6 +63,20 @@ export function getActiveAnimationGroup(scene: Scene): string | null {
 }
 
 /**
+ * Check if the animation group the given scene is currently in is a wait.
+ *
+ * @remarks
+ * A group is a wait if its generator is a direct {@link waitFor} or
+ * {@link waitUntil} call, as in a top-level `yield* waitFor(1);` statement.
+ * Waits nested inside other generators don't count.
+ *
+ * @param scene - The scene whose current frame is being exported.
+ */
+export function isActiveAnimationGroupWait(scene: Scene): boolean {
+  return states.get(scene)?.stack.at(-1)?.wait ?? false;
+}
+
+/**
  * Forget the group state of the given scene. Called at the start of each
  * fresh scene generator run so that indices restart at `0001`.
  *
@@ -95,11 +112,14 @@ export function* animationGroup(
   factory: () => ThreadGenerator,
 ): ThreadGenerator {
   const state = stateOf(useScene());
-  const entry: GroupEntry = {label, name: nextName(state, label)};
+  const entry: GroupEntry = {label, name: nextName(state, label), wait: false};
   state.stack.push(entry);
   state.gap = null;
   try {
-    yield* factory();
+    const generator = factory();
+    // Generators are instances of the generator function that created them.
+    entry.wait = generator instanceof waitFor || generator instanceof waitUntil;
+    yield* generator;
   } finally {
     const index = state.stack.lastIndexOf(entry);
     if (index !== -1) {

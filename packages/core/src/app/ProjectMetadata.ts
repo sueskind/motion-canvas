@@ -1,4 +1,5 @@
 import {
+  BoolMetaField,
   ColorMetaField,
   EnumMetaField,
   ExporterMetaField,
@@ -35,6 +36,9 @@ function createProjectMetadata(project: Project) {
         .setRange(1),
       resolutionScale: new EnumMetaField('scale', Scales, 1),
       colorSpace: new EnumMetaField('color space', ColorSpaces),
+      skipWaits: new BoolMetaField('skip idle waits', false).describe(
+        'Leave out the frames of top-level `waitFor` and `waitUntil` statements in which nothing moves. Only the first frame of such a wait is exported, which makes it a one-frame group when grouping by animation. A wait during which something still animates in the background is cut down to the part where things move. Waits inside other animations are never touched.',
+      ),
       exporter: new ExporterMetaField('exporter', project),
     }),
   };
@@ -69,6 +73,7 @@ export class ProjectMetadata extends ObjectMetaField<
     fps: number;
     resolutionScale: number;
     colorSpace: CanvasColorSpace;
+    skipWaits: boolean;
     background: Color | null;
     range: [number, number];
     size: Vector2;

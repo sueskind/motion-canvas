@@ -55,7 +55,12 @@ export function* waitFor(
   const targetTime = thread.time() + seconds;
   // subtracting the step is not necessary, but it keeps the thread time ahead
   // of the project time.
+  // The first yield is not marked as waiting, the code leading up to this wait
+  // has run during the same step.
+  let resumed = false;
   while (targetTime - step > thread.fixed) {
+    thread.waiting = resumed;
+    resumed = true;
     yield;
   }
   thread.time(targetTime);

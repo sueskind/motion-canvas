@@ -60,13 +60,20 @@ export function* join(
 
   const startTime = parent.time();
   let childTime;
+  // The first yield is not marked as waiting, the code leading up to this join
+  // has run during the same step.
+  let resumed = false;
   if (all) {
     while (threads.find(thread => !thread.canceled)) {
+      parent.waiting = resumed;
+      resumed = true;
       yield;
     }
     childTime = Math.max(...threads.map(thread => thread.time()));
   } else {
     while (!threads.find(thread => thread.canceled)) {
+      parent.waiting = resumed;
+      resumed = true;
       yield;
     }
     const canceled = threads.filter(thread => thread.canceled);

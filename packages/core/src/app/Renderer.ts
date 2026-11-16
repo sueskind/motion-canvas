@@ -1,7 +1,10 @@
 import {EventDispatcher, ValueDispatcher} from '../events';
-import type {Scene, Sound} from '../scenes';
+import type {Scene, Sound, Threadable} from '../scenes';
 import {ReadOnlyTimeEvents} from '../scenes/timeEvents';
-import {getActiveAnimationGroup} from '../flow/animationGroup';
+import {
+  getActiveAnimationGroup,
+  isActiveAnimationGroupWait,
+} from '../flow/animationGroup';
 import {clampRemap} from '../tweening';
 import {Vector2} from '../types';
 import {Semaphore} from '../utils';
@@ -17,6 +20,22 @@ export interface RendererSettings extends StageSettings {
   name: string;
   range: [number, number];
   fps: number;
+  /**
+   * The name of the only scene to render.
+   *
+   * @remarks
+   * When set, the `range` is ignored and the whole scene is rendered instead.
+   */
+  scene?: string | null;
+  /**
+   * Whether to leave out the idle frames of top-level waits.
+   *
+   * @remarks
+   * Applies to animation groups consisting of a single `waitFor` or
+   * `waitUntil` call. The first frame of such a group is always exported,
+   * the following frames only if something moved in them.
+   */
+  skipWaits?: boolean;
   exporter: {
     name: string;
     options: unknown;
@@ -33,6 +52,50 @@ export enum RendererResult {
   Success,
   Error,
   Aborted,
+}
+
+/**
+ * The state of the top-level wait that is currently being trimmed.
+ */
+interface WaitTrim {
+  /**
+   * Identifies the wait among all animation groups of the project.
+   */
+  key: string;
+  /**
+   * Whether anything has moved since the first frame of the wait.
+   */
+  active: boolean;
+  /**
+   * Whether the picture has been found to stay the same while the threads are
+   * idle. Checked anew after each rendered frame.
+   */
+  verified: boolean;
+  /**
+   * Whether the picture has been found to change while the threads are idle.
+   * Such a wait is rendered in full.
+   */
+  restless: boolean;
+  /**
+   * Idle frames that have not been exported, as `[frame, sceneFrame]`.
+   */
+  held: [number, number][];
+}
+
+function isIdle(scene: Scene | null): boolean {
+  if (!scene) return true;
+  const thread = (scene as Partial<Threadable>).onThreadChanged?.current;
+  return thread?.idle ?? false;
+}
+
+function isSameImage(a: ImageData, b: ImageData): boolean {
+  if (a.width !== b.width || a.height !== b.height) return false;
+  const pixelsA = new Uint32Array(a.data.buffer);
+  const pixelsB = new Uint32Array(b.data.buffer);
+  for (let i = 0; i < pixelsA.length; i++) {
+    if (pixelsA[i] !== pixelsB[i]) return false;
+  }
+  return true;
 }
 
 /**
@@ -69,6 +132,7 @@ export class Renderer {
   private readonly status: PlaybackStatus;
   private readonly sharedWebGLContext: SharedWebGLContext;
   private exporter: Exporter | null = null;
+  private waitTrim: WaitTrim | null = null;
   private abortController: AbortController | null = null;
 
   public constructor(private project: Project) {
@@ -192,40 +256,58 @@ export class Renderer {
       return RendererResult.Error;
     }
 
-    this.exporter = await exporterClass.create(this.project, settings);
-    if (this.exporter.configuration) {
-      settings = {
-        ...settings,
-        ...((await this.exporter.configuration()) ?? {}),
-      };
-    }
-    this.stage.configure(settings);
-    this.playback.fps = settings.fps;
-    this.playback.state = PlaybackState.Rendering;
-    const from = this.status.secondsToFrames(settings.range[0]);
-    this.frame.current = from;
-
-    await this.reloadScenes(settings);
-    await this.playback.recalculate();
+    await this.prepare(settings);
     if (signal.aborted) return RendererResult.Aborted;
+
+    let scene: Scene | null = null;
+    if (settings.scene) {
+      scene = this.findScene(settings.scene);
+      if (!scene) {
+        this.project.logger.error(
+          `Could not find the "${settings.scene}" scene.`,
+        );
+        return RendererResult.Error;
+      }
+      settings = {...settings, range: this.getSceneRange(scene)};
+    }
+
+    this.exporter = await exporterClass.create(this.project, settings);
+    const overrides = await this.exporter.configuration?.();
+    if (overrides) {
+      settings = {...settings, ...overrides};
+      await this.prepare(settings);
+      if (signal.aborted) return RendererResult.Aborted;
+      if (scene) {
+        settings = {...settings, range: this.getSceneRange(scene)};
+      }
+    }
+
+    let from = this.status.secondsToFrames(settings.range[0]);
+    let to = Math.min(
+      this.playback.duration,
+      this.status.secondsToFrames(settings.range[1]),
+    );
+    if (scene) {
+      from = scene.firstFrame;
+      to = scene.lastFrame;
+    }
+    this.frame.current = from;
 
     const sounds = this.collectSounds();
     await this.playback.reset();
     if (signal.aborted) return RendererResult.Aborted;
 
-    const to = Math.min(
-      this.playback.duration,
-      this.status.secondsToFrames(settings.range[1]),
-    );
     await this.playback.seek(from);
     if (signal.aborted) return RendererResult.Aborted;
 
     await this.exporter.start?.(sounds, to - from);
+    this.waitTrim = null;
+    const skipWaits = settings.skipWaits ?? false;
     let lastRefresh = performance.now();
     let result = RendererResult.Success;
     try {
       this.estimator.reset(1 / (to - from));
-      await this.exportFrame(signal);
+      await this.exportFrame(signal, skipWaits);
       this.estimator.update(clampRemap(from, to, 0, 1, this.playback.frame));
 
       if (signal.aborted) {
@@ -234,7 +316,11 @@ export class Renderer {
         let finished = false;
         while (!finished) {
           await this.playback.progress();
-          await this.exportFrame(signal);
+          if (scene && this.playback.currentScene !== scene) {
+            // This frame already belongs to the next scene.
+            break;
+          }
+          await this.exportFrame(signal, skipWaits);
           this.estimator.update(
             clampRemap(from, to, 0, 1, this.playback.frame),
           );
@@ -261,6 +347,34 @@ export class Renderer {
     return result;
   }
 
+  /**
+   * Configure the stage and the playback, and recalculate the scenes.
+   *
+   * @param settings - The rendering settings.
+   */
+  private async prepare(settings: RendererSettings) {
+    this.stage.configure(settings);
+    this.playback.fps = settings.fps;
+    this.playback.state = PlaybackState.Rendering;
+    await this.reloadScenes(settings);
+    await this.playback.recalculate();
+  }
+
+  private findScene(name: string): Scene | null {
+    return (
+      this.playback.onScenesRecalculated.current.find(
+        scene => scene.name === name,
+      ) ?? null
+    );
+  }
+
+  private getSceneRange(scene: Scene): [number, number] {
+    return [
+      this.status.framesToSeconds(scene.firstFrame),
+      this.status.framesToSeconds(scene.lastFrame),
+    ];
+  }
+
   private async reloadScenes(settings: RendererSettings) {
     for (let i = 0; i < this.project.scenes.length; i++) {
       const description = this.project.scenes[i];
@@ -283,23 +397,107 @@ export class Renderer {
     return sounds;
   }
 
-  private async exportFrame(signal: AbortSignal) {
-    this.frame.current = this.playback.frame;
+  private async exportFrame(signal: AbortSignal, skipWaits: boolean) {
+    const scene = this.playback.currentScene;
+    const frame = this.playback.frame;
+    const sceneFrame = frame - scene.firstFrame;
+    this.frame.current = frame;
+
+    if (!skipWaits || !isActiveAnimationGroupWait(scene)) {
+      this.waitTrim = null;
+      await this.renderFrameAndSend(frame, sceneFrame, signal);
+      return;
+    }
+
+    const key = `${scene.name}/${getActiveAnimationGroup(scene)}`;
+    if (this.waitTrim?.key !== key) {
+      // The first frame of a wait shows the outcome of whatever came before
+      // it, so it's always exported. The idle frames right after it are just
+      // a longer hold of that image.
+      this.waitTrim = {
+        key,
+        active: false,
+        verified: false,
+        restless: false,
+        held: [],
+      };
+      await this.renderFrameAndSend(frame, sceneFrame, signal);
+      return;
+    }
+
+    const trim = this.waitTrim;
+    let rendered = false;
+    if (
+      !trim.restless &&
+      isIdle(scene) &&
+      isIdle(this.playback.previousScene)
+    ) {
+      if (!trim.verified) {
+        // Not everything that moves is driven by a thread: signals can depend
+        // on time directly, as do shaders and videos. Such things move
+        // continuously, so one look at the picture is enough to notice them.
+        const before = this.readStage();
+        await this.renderStage();
+        rendered = true;
+        trim.verified = true;
+        trim.restless = !isSameImage(before, this.readStage());
+      }
+
+      if (!trim.restless) {
+        // Nothing moved. This frame is only exported if something moves again
+        // before the wait is over.
+        trim.held.push([frame, sceneFrame]);
+        return;
+      }
+    }
+
+    if (trim.active) {
+      // A pause between two movements is a part of the animation. The stage
+      // still shows the same picture as during the held frames.
+      for (const [heldFrame, heldSceneFrame] of trim.held) {
+        await this.send(heldFrame, heldSceneFrame, signal);
+      }
+    }
+    trim.held = [];
+    trim.active = true;
+    trim.verified = false;
+    if (!rendered) {
+      await this.renderStage();
+    }
+    await this.send(frame, sceneFrame, signal);
+  }
+
+  private async renderFrameAndSend(
+    frame: number,
+    sceneFrame: number,
+    signal: AbortSignal,
+  ) {
+    await this.renderStage();
+    await this.send(frame, sceneFrame, signal);
+  }
+
+  private async renderStage() {
     await this.stage.render(
       this.playback.currentScene!,
       this.playback.previousScene,
     );
+  }
 
-    const sceneFrame =
-      this.playback.frame - this.playback.currentScene.firstFrame;
+  private readStage(): ImageData {
+    const {width, height} = this.stage.finalBuffer;
+    return this.stage.context.getImageData(0, 0, width, height);
+  }
+
+  private async send(frame: number, sceneFrame: number, signal: AbortSignal) {
+    const scene = this.playback.currentScene;
     await this.exporter!.handleFrame(
       this.stage.finalBuffer,
-      this.playback.frame,
+      frame,
       sceneFrame,
-      this.playback.currentScene.name,
+      scene.name,
       signal,
       this.stage.context,
-      getActiveAnimationGroup(this.playback.currentScene),
+      getActiveAnimationGroup(scene),
     );
   }
 }

@@ -2,14 +2,31 @@ import {RendererState} from '@motion-canvas/core';
 import {useApplication} from '../../contexts';
 import {useRendererState, useStorage} from '../../hooks';
 import {openOutputPath} from '../../utils';
-import {Button, ButtonSelect, Group, Label, Separator} from '../controls';
+import {
+  Button,
+  ButtonSelect,
+  Group,
+  Label,
+  Select,
+  Separator,
+} from '../controls';
 import {Expandable} from '../fields';
 import {MetaFieldView} from '../meta';
 import {Pane} from '../tabs';
 
+const SCENE_DESCRIPTION =
+  'Render only the selected scene.\nThe range is ignored while a scene is selected.';
+
 export function VideoSettings() {
-  const {meta} = useApplication();
+  const {meta, project} = useApplication();
   const [processId, setProcess] = useStorage('main-action', 0);
+  const [storedScene, setScene] = useStorage<string | null>(
+    'render-scene',
+    null,
+  );
+  const sceneNames = project.scenes.map(scene => scene.name);
+  // The stored scene may have been renamed or removed since.
+  const scene = sceneNames.includes(storedScene) ? storedScene : null;
 
   return (
     <Pane title="Video Settings" id="settings-pane">
@@ -21,10 +38,25 @@ export function VideoSettings() {
       </Expandable>
       <Expandable title={meta.rendering.name} open>
         <MetaFieldView field={meta.rendering} />
+        <Group title={SCENE_DESCRIPTION}>
+          <Label title={SCENE_DESCRIPTION}>scene</Label>
+          <Select
+            options={[
+              {value: null, text: 'All scenes'},
+              ...sceneNames.map(name => ({value: name, text: name})),
+            ]}
+            value={scene}
+            onChange={setScene}
+          />
+        </Group>
         <Separator />
         <Group>
           <Label />
-          <ProcessButton processId={processId} setProcess={setProcess} />
+          <ProcessButton
+            processId={processId}
+            setProcess={setProcess}
+            scene={scene}
+          />
         </Group>
         {processId === 0 && (
           <Group>
@@ -45,9 +77,10 @@ export function VideoSettings() {
 interface ProcessButtonProps {
   processId: number;
   setProcess: (id: number) => void;
+  scene: string | null;
 }
 
-function ProcessButton({processId, setProcess}: ProcessButtonProps) {
+function ProcessButton({processId, setProcess, scene}: ProcessButtonProps) {
   const {renderer, presenter, meta, project} = useApplication();
   const rendererState = useRendererState();
 
@@ -62,6 +95,7 @@ function ProcessButton({processId, setProcess}: ProcessButtonProps) {
           renderer.render({
             ...meta.getFullRenderingSettings(),
             name: project.name,
+            scene,
           });
         } else {
           presenter.present({
