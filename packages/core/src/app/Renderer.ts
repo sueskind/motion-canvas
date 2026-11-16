@@ -320,6 +320,12 @@ export class Renderer {
             // This frame already belongs to the next scene.
             break;
           }
+          if (this.playback.finished) {
+            // The last scene has run to its end. This frame lies one past
+            // the animation's last frame (it is frame number `duration`) and
+            // shows that last frame again.
+            break;
+          }
           await this.exportFrame(signal, skipWaits);
           this.estimator.update(
             clampRemap(from, to, 0, 1, this.playback.frame),
